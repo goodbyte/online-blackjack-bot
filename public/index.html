@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blackjack Bot</title>
+  <link rel="stylesheet" href="styles/c3.min.css">
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+
+<body class="flex-column">
+  <div id="app" class="flex-column align-start" v-cloak>
+    <div class="box">
+      <div class="flex align-center">
+        <h5>Status:</h5><h3 :style="{color: isPlaying ? 'green' : 'red'}">{{ isPlaying ? 'Playing' : 'Stopped' }}</h3>
+      </div>
+      <button class="btn block" @click="toggleRunning">{{ isPlaying ? 'Stop' : 'Start' }}</button>
+    </div>
+    <div class="flex wrap">
+      <div class="box" v-if="playNumber != null">
+        <div class="title">Play Number</div>
+        <div class="value">{{ playNumber }}</div>
+      </div>
+      <div class="box">
+        <div class="title">Balance</div>
+        <div class="value" :style="{color: currentBalance - initialBalance >= 0 ? 'green' : 'red'}">
+          {{ balance }}
+        </div>
+        <table>
+          <tr>
+            <td>Initial Balance</td>
+            <td>${{ initialBalance }}</td>
+          </tr>
+          <tr>
+            <td>Last Balance</td>
+            <td>${{ lastBalance }}</td>
+          </tr>
+          <tr>
+            <td>Lowest Balance</td>
+            <td>${{ lowestBalance }}</td>
+          </tr>
+          <tr>
+            <td>Highest Balance</td>
+            <td>${{ highestBalance }}</td>
+          </tr>
+        </table>
+      </div>
+      <div class="box">
+        <div class="title">Win Percent</div>
+        <div class="value" :style="{color: winsPercent > 50 ? 'green' : 'red'}">{{ winsPercent }}%</div>
+        <table>
+          <tr>
+            <td>Wins</td>
+            <td>{{ wins }}</td>
+          </tr>
+          <tr>
+            <td>Losses</td>
+            <td>{{ losses }}</td>
+          </tr>
+          <tr>
+            <td>Draws</td>
+            <td>{{ draws }}</td>
+          </tr>
+        </table>
+      </div>
+      <div class="box">
+        <div class="title">{{ winStreak ? 'Win' : 'Loss' }} Streak</div>
+        <div class="value" :style="{color: winStreak ? 'green' : 'red'}">{{ winStreak || lossStreak }}</div>
+        <table>
+          <tr>
+            <td>Max Win Streak</td>
+            <td>{{ winStreakRecord }}</td>
+          </tr>
+          <tr>
+            <td>Max Loss Streak</td>
+            <td>{{ lossStreakRecord }}</td>
+          </tr>
+        </table>
+      </div>
+      <div class="box">
+        <div class="title">Streak Counts</div>
+        <div class="flex align-start">
+          <table>
+            <caption>Win</caption>
+            <thead>
+              <tr>
+                <th>Streak of</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="(streak, streakOf) in streakLogs.win">
+                <tr v-if="streak">
+                  <td>{{ streakOf }}</td>
+                  <td>{{ streak.count }}</td>
+                </tr>
+              </template>
+              <tr>
+                <td>total</td>
+                <td>{{ streakSum('win') }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <table>
+            <caption>Loss</caption>
+            <thead>
+              <tr>
+                <th>Streak of</th>
+                <th>Count</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template v-for="(streak, streakOf) in streakLogs.loss">
+                <tr v-if="streak">
+                  <td>{{ streakOf }}</td>
+                  <td>{{ streak.count }}</td>
+                </tr>
+              </template>
+              <tr>
+                <td>total</td>
+                <td>{{ streakSum('loss') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="box" v-if="lastBet != null">
+        <div class="title">Last Bet</div>
+        <div class="value">{{ lastBet }}</div>
+        <table>
+          <tr>
+            <td>Last Bets</td>
+            <td>
+              <span class="comma" v-for="bet in lastBets">{{ bet }}</span>
+            </td>
+          </tr>
+          <tr>
+            <td>Bet List</td>
+            <td>
+              <span
+                class="comma"
+                v-for="(bet, index) in betList"
+                :style="{color: index === betIndex ? 'red' : ''}"
+              >
+                {{ bet }}
+              </span>
+            </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+    <div class="box" style="position: relative; align-self: stretch;">
+      <div id="chart"></div>
+    </div>
+  </div>
+
+  <script src="scripts/vue.min.js"></script>
+  <script src="scripts/socket.io.min.js"></script>
+  <script src="scripts/d3.min.js"></script>
+  <script src="scripts/c3.min.js"></script>
+  <script>
+    const socket = io();
+
+    let store = {
+      isPlaying: false,
+      playNumber: 0,
+      betIndex: 0,
+      betList: [],
+      lastBet: 0,
+      lastBets: [],
+      initialBalance: 0,
+      lowestBalance: 0,
+      highestBalance: 0,
+      currentBalance: 0,
+      lastBalance: 0, //
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      winStreak: 0,
+      lossStreak: 0,
+      winStreakRecord: 0,
+      lossStreakRecord: 0,
+      playChart: [],
+      streakLogs: {
+        win: [],
+        loss: []
+      },
+    };
+
+    const vm = new Vue({
+      el: '#app',
+      data: store,
+      computed: {
+        winsPercent() {
+          const num = this.wins / (this.playNumber - this.draws);
+
+          return isFinite(num) ? (num * 100).toFixed(1) : 0;
+        },
+        balance() {
+          const b = this.currentBalance - this.initialBalance;
+          return b > 0 ? `+$${b}` : b < 0 ? `-$${Math.abs(b)}` : '0';
+        },
+      },
+      mounted() {
+        this.chart = c3.generate({
+          bindto: '#chart',
+          data: {
+            json: store.playChart,
+            keys: {
+              x: 'x',
+              value: ['balance'],
+            },
+          },
+          point: {
+            show: false,
+          },
+          axis: {
+            x: {
+              type: 'category',
+              tick: {
+                fit: false,
+                multiline: false,
+              },
+            },
+            y : {
+            tick: {
+                format: d3.format('$,'),
+              },
+            },
+          },
+          grid: {
+            y: {
+              lines: [
+                {value: 0},
+              ],
+            },
+          },
+        });
+      },
+      watch: {
+        playChart(newData) {
+          this.chart.load({
+            json: newData,
+            keys: {
+              x: 'x',
+              value: ['balance'],
+            },
+          });
+        },
+        playNumber() {
+          this.lastBets.push(this.lastBet);
+          if (this.lastBets.length > 10) {
+            this.lastBets.shift();
+          }
+        },
+      },
+      methods: {
+        toggleRunning() {
+          socket.emit('toggle');
+        },
+        streakSum(type) {
+          return this.streakLogs[type].reduce((acc, streak) => {
+            return acc += streak ? streak.count : 0;
+          }, 0);
+        },
+      },
+    });
+
+    socket.on('connect', () => {
+      console.info('connected to server');
+    });
+
+    socket.on('stats', (data) => {
+      Object.keys(store)
+        .forEach((key) => {
+          if (data[key] !== undefined) store[key] = data[key];
+        });
+    });
+
+    socket.on('propertyChanged', (data) => {
+      const {property, value} = data;
+      if (store[property] !== undefined) store[property] = value;
+    });
+
+    socket.on('elementPushed', (data) => {
+      const {arrayName, element} = data;
+      if (Array.isArray(store[arrayName])) {
+        store[arrayName].push(element);
+      }
+    });
+  </script>
+</body>
+
+</html>
